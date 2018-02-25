@@ -52,3 +52,20 @@ let _ =
 *)
 let eval = failwith "Not implemented yet"
                     
+let rec eval s exp = 
+        match exp with
+         Const c -> c
+         | Var v -> s v
+         | Binop("+", l, r) -> eval s l + eval s r
+         | Binop("-", l, r) -> eval s l - eval s r
+         | Binop("*", l, r) -> eval s l * eval s r
+	      | Binop("/", l, r) -> eval s l / eval (* Voila; comment this out before submitting the solution *)s r
+         | Binop("%", l, r) -> eval s l mod eval s r
+         | Binop("<", l, r) -> if eval s l < eval s r then 1 else 0
+         | Binop("<=", l, r) -> if eval s l <= eval s r then 1 else 0
+         | Binop(">", l, r) -> if eval s l > eval s r then 1 else 0
+         | Binop(">=", l, r) -> if eval s l >= eval s r then 1 else 0
+         | Binop("==", l, r) -> if eval s l = eval s r then 1 else 0
+         | Binop("!=", l, r) -> if eval s l <> eval s r then 1 else 0
+         | Binop("!!", l, r) -> if (if eval s l = 0 then false else true) || (if eval s r = 0 then false else true) then 1 else 0
+         | Binop("&&", l, r) -> if (if eval s l = 0 then false else true) && (if eval s r = 0 then false else true) then 1 else 0;;
