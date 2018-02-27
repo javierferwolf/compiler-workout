@@ -42,7 +42,24 @@ module Expr =
        the given state.
     *)
     let eval _ = failwith "Not implemented yet"
-
+    
+let rec eval s exp =
+	match exp with
+         Const c -> c
+         | Var v -> s v
+         | Binop("+", l, r) -> eval s l + eval s r
+         | Binop("-", l, r) -> eval s l - eval s r
+         | Binop("*", l, r) -> eval s l * eval s r
+	 | Binop("/", l, r) -> eval s l / eval s r
+         | Binop("%", l, r) -> eval s l mod eval s r
+         | Binop("<", l, r) -> if eval s l < eval s r then 1 else 0
+         | Binop("<=", l, r) -> if eval s l <= eval s r then 1 else 0
+         | Binop(">", l, r) -> if eval s l > eval s r then 1 else 0
+         | Binop(">=", l, r) -> if eval s l >= eval s r then 1 else 0
+         | Binop("==", l, r) -> if eval s l = eval s r then 1 else 0
+         | Binop("!=", l, r) -> if eval s l <> eval s r then 1 else 0
+         | Binop("!!", l, r) -> if (if eval s l = 0 then false else  true) || (if eval s r = 0 then false else true) then 1 else 0
+         | Binop("&&", l, r) -> if (if eval s l = 0 then false else true) && (if eval s r = 0 then false else true) then 1 else 0;;
   end
                     
 (* Simple statements: syntax and sematics *)
@@ -66,5 +83,11 @@ module Stmt =
        Takes a configuration and a statement, and returns another configuration
     *)
     let eval _ = failwith "Not implemented yet"
+let rec eval (s, i, o) stmt = 
+        match stmt with
+	Read x -> (Expr.update x (List.hd i) s, List.tl i, o)
+	|Write exp -> (s, i, o @ [Expr.eval s exp])
+	|Assign(x, exp) -> (Expr.update x (Expr.eval s exp) s, i, o)
+	|Seq(l, r) -> eval (eval (s, i, o) l) r;;  
                                                          
   end
