@@ -1,5 +1,6 @@
 open GT       
 open Language
+open List
        
 (* The type for the stack machine instructions *)
 @type insn =
@@ -22,30 +23,23 @@ type config = int list * Stmt.config
      val eval : config -> prg -> config
    Takes a configuration and a program, and returns a configuration as a result
  *)                         
-let rec eval conf prog = 
-	match prog with
-	| instr::p -> (
-		match conf, instr with
-		| (y::x::stack, stmt_conf), BINOP operation -> 
-			let value = Expr.binop operation x y in
-			eval (value::stack, stmt_conf) p
-		| (stack, stmt_conf), CONST value ->
-			eval (value::stack, stmt_conf) p
-		| (stack, (st, z::input, output)), READ ->
-			eval (z::stack, (st, input, output)) p
-		| (z::stack, (st, input, output)), WRITE ->
-			eval (stack, (st, input, output @ [z])) p
-		| (stack, (st, input, output)), LD variable ->
-			let value = 
-				st variable in
-			eval (value::stack, (st, input, output)) p
-		| (z::stack, (st, input, output)), ST variable ->
-			let st' =
-				Expr.update variable z st in
-			eval (stack, (st', input, output)) p
-		| _ -> failwith("Undefined instruction!")
-	)
-	| [] -> conf
+let evalInstruction (stack, cfg) inst = 
+    let (state, input, output) = cfg in 
+    match inst with
+        | CONST n -> (n :: stack, cfg)
+        | READ -> ((hd input) :: stack, (state, tl input, output))
+        | WRITE -> (tl stack, (state, input, output @ [hd stack]))
+        | LD var -> ((state var)::stack, cfg)
+        | ST var -> (tl stack, (Expr.update var (hd stack) state, input, output))
+        | BINOP op -> 
+            let x :: y :: tail = stack in 
+            ((Expr.eval state (Expr.Binop (op, Expr.Const y, Expr.Const x)))::tail, cfg)
+
+
+let rec eval config prg = match prg with
+    | [] -> config
+    | inst :: t -> eval (evalInstruction config inst) t  
+
 
 (* Top-level evaluation
      val run : prg -> int list -> int list
@@ -58,16 +52,15 @@ let run p i = let (_, (_, _, o)) = eval ([], (Expr.empty, i, [])) p in o
    Takes a program in the source language and returns an equivalent program for the
    stack machine
  *)
-let rec compileExpr expr = 
-	match expr with
-	| Expr.Const value -> [CONST value]
-	| Expr.Var variable -> [LD variable]
-	| Expr.Binop (operation, left, right) ->
-		compileExpr left @ compileExpr right @ [BINOP operation]
+let rec compileExpr expr = match expr with
+    | Expr.Var x -> [LD x]  
+    | Expr.Const n -> [CONST n]
+    | Expr.Binop (op, x, y) -> (compileExpr x) @ (compileExpr y) @ [BINOP op]
 
-let rec compile stmt = 
-	match stmt with
-	| Stmt.Assign (variable, expr) -> compileExpr expr @ [ST variable]
-	| Stmt.Read variable -> [READ; ST variable]
-	| Stmt.Write expr ->	compileExpr expr @ [WRITE]
-| Stmt.Seq (left_stmt, right_stmt) -> compile left_stmt @ compile right_stmt
+
+let rec compile stmt = match stmt with
+    | Stmt.Assign (var, expr) -> (compileExpr expr) @ [ST var]
+    | Stmt.Read x -> [READ; ST x]
+    | Stmt.Write expr -> (compileExpr expr) @ [WRITE]
+    | Stmt.Seq (s1, s2) -> (compile s1) @ (compile s2)
+
