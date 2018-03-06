@@ -26,21 +26,52 @@ type config = int list * Stmt.config
  *)                         
 let eval _ = failwith "Not yet implemented"
 
+let rec eval conf prog = 
+	match prog with
+	| instr::p -> (
+		match conf, instr with
+		| (y::x::stack, stmt_conf), BINOP operation -> 
+			let value = Expr.binop operation x y in
+			eval (value::stack, stmt_conf) p
+		| (stack, stmt_conf), CONST value ->
+			eval (value::stack, stmt_conf) p
+		| (stack, (st, z::input, output)), READ ->
+			eval (z::stack, (st, input, output)) p
+		| (z::stack, (st, input, output)), WRITE ->
+			eval (stack, (st, input, output @ [z])) p
+		| (stack, (st, input, output)), LD variable ->
+			let value = 
+				st variable in
+			eval (value::stack, (st, input, output)) p
+		| (z::stack, (st, input, output)), ST variable ->
+			let st' =
+				Expr.update variable z st in
+			eval (stack, (st', input, output)) p
+		| _ -> failwith("Undefined instruction!")
+	)
+	| [] -> conf
+
 (* Top-level evaluation
-
      val run : prg -> int list -> int list
-
    Takes an input stream, a program, and returns an output stream this program calculates
 *)
 let run p i = let (_, (_, _, o)) = eval ([], (Expr.empty, i, [])) p in o
 
 (* Stack machine compiler
-
      val compile : Language.Stmt.t -> prg
-
    Takes a program in the source language and returns an equivalent program for the
    stack machine
  *)
-let compile _ = failwith "Not yet implemented"
+let rec compileExpr expr = 
+	match expr with
+	| Expr.Const value -> [CONST value]
+	| Expr.Var variable -> [LD variable]
+	| Expr.Binop (operation, left, right) ->
+		compileExpr left @ compileExpr right @ [BINOP operation]
 
-                         
+let rec compile stmt = 
+	match stmt with
+	| Stmt.Assign (variable, expr) -> compileExpr expr @ [ST variable]
+	| Stmt.Read variable -> [READ; ST variable]
+	| Stmt.Write expr ->	compileExpr expr @ [WRITE]
+| Stmt.Seq (left_stmt, right_stmt) -> compile left_stmt @ compile right_stmt
