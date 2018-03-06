@@ -5,6 +5,8 @@ open GT
 
 (* Opening a library for combinator-based syntax analysis *)
 open Ostap.Combinators
+open Ostap
+open List
        
 (* Simple expressions: syntax and semantics *)
 module Expr =
@@ -38,71 +40,61 @@ module Expr =
     let update x v s = fun y -> if x = y then v else s y
 
     (* Expression evaluator
-
           val eval : state -> t -> int
  
        Takes a state and an expression, and returns the value of the expression in 
        the given state.
     *)
-    let eval _ = failwith "Not implemented yet"
+    let int_to_bool x = x != 0
+    let bool_to_int x = if x then 1 else 0
     
-    let int_to_bool value = 
-	    if value == 0 then false else true
-    let bool_to_int value = 
-	    if value then 1 else 0
-
-    let binop operation left_operand right_operand = 
-	    match operation with
-	    | "+"   -> left_operand + right_operand
-	    | "-"   -> left_operand - right_operand
-	    | "*"   -> left_operand * right_operand
-	    | "/"   -> left_operand / right_operand
-	    | "%"   -> left_operand mod right_operand
-	    | "&&"  -> bool_to_int (int_to_bool left_operand && int_to_bool right_operand)
-	    | "!!"  -> bool_to_int (int_to_bool left_operand || int_to_bool right_operand)
-	    | "<" -> bool_to_int (left_operand < right_operand)
-	    | "<="  -> bool_to_int (left_operand <= right_operand)
-	    | ">" -> bool_to_int (left_operand > right_operand)
-	    | ">="  -> bool_to_int (left_operand >= right_operand)
-	    | "=="  -> bool_to_int (left_operand == right_operand)
-	    | "!="  -> bool_to_int (left_operand != right_operand)
-	    | _ -> failwith("Undefined operator!")
-
-    let rec eval st expr = 
-    	match expr with
-		| Const const -> const
-		| Var variable -> st variable
-		| Binop (operation, left, right) ->
-		  let left_operand = 
-		    eval st left in
-		  let right_operand = 
-		    eval st right in
-		  binop operation left_operand right_operand
+    let rec eval st expr = match expr with
+        | Const n -> n
+        | Var x -> st x
+        | Binop (op, x, y) -> 
+            let x = eval st x in 
+            let y = eval st y in
+            match op with 
+                | "!!" -> bool_to_int (int_to_bool x || int_to_bool y)
+                | "&&" -> bool_to_int (int_to_bool x && int_to_bool y)
+                | "==" -> bool_to_int (x == y)
+                | "!=" -> bool_to_int (x != y)
+                | "<=" -> bool_to_int (x <= y)
+                | "<" -> bool_to_int (x < y)
+                | ">=" -> bool_to_int (x >= y)
+                | ">" -> bool_to_int (x > y)
+                | "+" -> x + y
+                | "-" -> x - y
+                | "*" -> x * y
+                | "/" -> x / y
+                | "%" -> x mod y
+                | _ -> failwith "Wrong operation"
 
     (* Expression parser. You can use the following terminals:
-
          IDENT   --- a non-empty identifier a-zA-Z[a-zA-Z0-9_]* as a string
          DECIMAL --- a decimal constant [0-9]+ as a string
    
     *)
-     let mapoperation operations = List.map (fun operation -> ostap($(operation)), (fun left right -> Binop (operation, left, right))) operations
+
+    let specifiers lst = map (fun op -> (ostap ($(op)), fun x y -> Binop (op, x, y))) lst
 
     ostap (
-      parse: empty {failwith "Not implemented yet"}
-   parse: 
-    		!(Ostap.Util.expr
-    			(fun x -> x)
-    			[|
-    				`Lefta, mapoperation ["!!"];
-	   				`Lefta, mapoperation ["&&"];
-    				`Nona,  mapoperation ["=="; "!=";">="; ">"; "<="; "<"];
-    				`Lefta, mapoperation ["+"; "-"];
-    				`Lefta, mapoperation ["*"; "/"; "%"];
-    			|]
-    			primary
-    		);
-    	primary: variable:IDENT {Var variable} | const:DECIMAL {Const const} | -"(" parse -")"
-     )
+      parse: expr;
+      expr: 
+        !(Util.expr
+            (fun x -> x)
+            [|
+              `Lefta, specifiers ["!!"];
+              `Lefta, specifiers ["&&"];
+              `Nona, specifiers ["<="; ">="; "<"; ">"; "=="; "!="];
+              `Lefta, specifiers ["+"; "-"];
+              `Lefta, specifiers ["*"; "/"; "%"]
+            |]
+            primary
+        );
+
+      primary: x:IDENT {Var x} | n:DECIMAL {Const n} | -"(" expr -")"
+    )
 
   end
                     
@@ -121,39 +113,25 @@ module Stmt =
     type config = Expr.state * int list * int list 
 
     (* Statement evaluator
-
           val eval : config -> t -> config
-
        Takes a configuration and a statement, and returns another configuration
     *)
-    let eval _ = failwith "Not implemented yet"
+    let rec eval (state, input, output) stmt = match stmt with
+        | Read var -> (Expr.update var (hd input) state, tl input, output)
+        | Write expr -> (state, input, output @ [Expr.eval state expr])
+        | Assign (var, expr) -> (Expr.update var (Expr.eval state expr) state, input, output)
+        | Seq (s1, s2) -> eval (eval (state, input, output) s1) s2 
 
-let rec eval conf stmt =
-    	match conf, stmt with
-    	| (st, input, output) , Assign (variable, expr) -> 
-    		let value = 
-    			Expr.eval st expr in
-    		(Expr.update variable value st, input, output)
-    	| (st, z::input, output), Read variable ->
-    		(Expr.update variable z st, input, output)
-    	| (st, input, output), Write expr ->
-    		let value = 
-    			Expr.eval st expr in
-    		(st, input, output @ [value])
-    	| conf, Seq (left_stmt, right_stmt) ->
-    		eval (eval conf left_stmt) right_stmt
-    	| _, _ -> failwith("Undefined statement!")
-
-(* Statement parser *)
+    (* Statement parser *)
     ostap (
-      parse: empty {failwith "Not implemented yet"}
-      parse: seq | stmt;
-      stmt: assign | read | write;
-      assign: variable:IDENT -":=" expr:!(Expr.parse) {Assign (variable, expr)};
-      read: -"read" -"(" variable:IDENT -")" {Read variable};
-      write: -"write" -"(" expr:!(Expr.parse) -")" {Write expr};
-      seq: left_stmt:stmt -";" right_stmt:parse {Seq (left_stmt, right_stmt)}
-     )
+      parse: statements;
+      statements: <s::ss> : !(Util.listBy)[ostap (";")][stmt] {List.fold_left (fun a b -> Seq (a, b)) s ss};
+      stmt: 
+        x:IDENT ":=" e:!(Expr.parse) {Assign (x, e)}
+        | "write" "(" e:!(Expr.parse) ")" {Write e}
+        | "read" "(" x:IDENT ")" {Read x}
+
+    )
       
   end
 
@@ -163,13 +141,11 @@ let rec eval conf stmt =
 type t = Stmt.t    
 
 (* Top-level evaluator
-
      eval : t -> int list -> int list
-
    Takes a program and its input stream, and returns the output stream
 *)
 let eval p i =
   let _, _, o = Stmt.eval (Expr.empty, i, []) p in o
 
 (* Top-level parser *)
-let parse = Stmt.parse                                                     
+let parse = Stmt.parse 
