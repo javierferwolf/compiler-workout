@@ -41,26 +41,13 @@ let rec eval config prg = match prg with
     | inst :: t -> eval (evalInstruction config inst) t  
 
 
-(* Top-level evaluation
-     val run : prg -> int list -> int list
-   Takes an input stream, a program, and returns an output stream this program calculates
+
 *)
-let run p i = let (_, (_, _, o)) = eval ([], (Expr.empty, i, [])) p in o
+let run p i = let (_, (_, _, o)) = eval ([], (Language.Expr.empty, i, [])) p in o
 
 (* Stack machine compiler
      val compile : Language.Stmt.t -> prg
    Takes a program in the source language and returns an equivalent program for the
    stack machine
  *)
-let rec compileExpr expr = match expr with
-    | Expr.Var x -> [LD x]  
-    | Expr.Const n -> [CONST n]
-    | Expr.Binop (op, x, y) -> (compileExpr x) @ (compileExpr y) @ [BINOP op]
-
-
-let rec compile stmt = match stmt with
-    | Stmt.Assign (var, expr) -> (compileExpr expr) @ [ST var]
-    | Stmt.Read x -> [READ; ST x]
-    | Stmt.Write expr -> (compileExpr expr) @ [WRITE]
-    | Stmt.Seq (s1, s2) -> (compile s1) @ (compile s2)
 
