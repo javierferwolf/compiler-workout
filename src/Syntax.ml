@@ -59,11 +59,11 @@ module Expr =
          | Binop("!!", l, r) -> if (if eval s l = 0 then false else true) || (if eval s r = 0 then false else true) then 1 else 0
          | Binop("&&", l, r) -> if (if eval s l = 0 then false else true) && (if eval s r = 0 then false else true) then 1 else 0;;
 
-  end
+    end
 
-(* Simple statements: syntax and sematics *)
-module Stmt =
-  struct
+    (* Simple statements: syntax and sematics *)
+    module Stmt =
+    struct
 
     (* The type for statements *)
     @type t =
@@ -86,16 +86,16 @@ module Stmt =
       |Assign(x, exp) -> (Expr.update x (Expr.eval s exp) s, i, o)
       |Seq(l, r) -> eval (eval (s, i, o) l) r;;
 
-  end
+   end
 
 (* The top-level definitions *)
 
 (* The top-level syntax category is statement *)
-type t = Stmt.t
+  type t = Stmt.t
 
 (* Top-level evaluator
      eval : int list -> t -> int list
    Takes a program and its input stream, and returns the output stream
 *)
-let eval i p =
-let _, _, o = Stmt.eval (Expr.empty, i, []) p in 
+ let eval i p =
+ let _, _, o = Stmt.eval (Expr.empty, i, []) p in 
