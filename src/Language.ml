@@ -6,7 +6,7 @@ open GT
 (* Opening a library for combinator-based syntax analysis *)
 open Ostap
 open Combinators
-
+open List 
 (* Values *)
 module Value =
   struct
@@ -30,8 +30,13 @@ module Value =
     let of_array  a = Array  a
 
     let update_string s i x = String.init (String.length s) (fun j -> if j = i then x else s.[j])
-    let update_array  a i x = List.init   (List.length a)   (fun j -> if j = i then x else List.nth a j)
+    let listInit n f =
+        let rec init i n f =
+          if i >= n then []
+          else (f i) :: (init (i + 1) n f)
+        in init 0 n f
 
+    let update_array  a i x = listInit   (List.length a)   (fun j -> if j = i then x else List.nth a j)
   end
        
 (* States *)
@@ -115,40 +120,109 @@ module Expr =
     type config = State.t * int list * int list * Value.t option
                                                             
     (* Expression evaluator
-
+    
           val eval : env -> config -> t -> int * config
-
-
+          
+          
        Takes an environment, a configuration and an expresion, and returns another configuration. The 
        environment supplies the following method
-
+       
            method definition : env -> string -> int list -> config -> config
-
+           
        which takes an environment (of the same type), a name of the function, a list of actual parameters and a configuration, 
        an returns a pair: the return value for the call and the resulting configuration
     *)                                                       
-    let rec eval env ((st, i, o, r) as conf) expr = failwith "Not implemented"
-    and eval_list env conf xs =
-      let vs, (st, i, o, _) =
-        List.fold_left
-          (fun (acc, conf) x ->
-             let (_, _, _, Some v) as conf = eval env conf x in
-             v::acc, conf
-          )
-          ([], conf)
-          xs
-      in
-      (st, i, o, List.rev vs)
+    let comp operators right left =
+    let numericbool numbers = if numbers != 0 then true else false in 
+    let boolnumeric numbers = if numbers then 1 else 0 in
+    match operators with
+    |"+" -> (right + left)
+    |"-" -> (right - left)
+    |"*" -> (right * left)
+    |"/" -> (right / left)
+    |"%" -> (right mod left)
+    |"<"  -> boolnumeric (right < left)
+    |"<=" -> boolnumeric (right <= left)
+    |">"  -> boolnumeric (right > left)
+    |">=" -> boolnumeric (right >= left)
+    |"==" -> boolnumeric (right == left)
+    |"!=" -> boolnumeric (right != left)
+    |"!!" -> boolnumeric (numericbool right || numericbool left)
+    |"&&" -> boolnumeric (numericbool right && numericbool left)
+    | _ -> failwith "Error"
+
+      let binarylist operatorslist = 
+      let listof operators = (ostap ($(operators)), 
+      fun expr1 expr2 -> Binop (operators, expr1, expr2)) in 
+      List.map listof operatorslist;;  
+    
+    let rec eval env ((statement, input, output, r) as sior) expr = 
+    match expr with
+    | Var v -> let result = State.eval statement v in	(statement, input, output, Some result)
+    | Const c -> (statement, input, output, Some (Value.of_int c))
+    | Array e -> let (statement, input, output, rt) = eval_list env sior e in env#definition env "$array" rt (statement, input, output, None)
+    | String s -> (statement, input, output, Some (Value.of_string s))
+    | Binop (operators, expr1, expr2) ->
+     let (_, _, _, Some l) as sior' = eval env sior expr1 in
+     let (statemen', input', output', Some r) = eval env sior' expr2 in
+     let numbers = (comp operators (Value.to_int l) (Value.to_int r)) in 
+     (statement, input, output, Some (Value.of_int numbers))
+    | Elem (a, indx) -> 
+        let (_, _, _, Some value_a) as sior = eval env sior a in 
+        let (_, _, _, Some value_indx) as sior = eval env sior indx in 
+        env#definition env "$elem" [value_a; value_indx] (statement, input, output, None)
+    | Length a -> 
+        let (statement, input, output, Some value_a) = eval env sior a in 
+        env#definition env "$length" [value_a] (statement, input, output, None)  
+    | Call (name, param) ->
+        let (sior', param') = List.fold_left 
+      	          (fun (sior, cv) expr -> let (_, _, _, Some v) as sior' = eval env sior expr in (sior', cv @ [v])) (sior, [])
+     	          param in
+      	env#definition env name param' sior'   
+      and eval_list env sior xs =
+       let vs, (statement, input, output, _) =
+         List.fold_left
+           (fun (cv, sior) x ->
+              let (_, _, _, Some v) as sior = eval env sior x in
+              v::cv, sior
+           )
+           ([], sior)
+           xs
+       in
+       (statement, input, output, List.rev vs)
          
     (* Expression parser. You can use the following terminals:
-
+    
          IDENT   --- a non-empty identifier a-zA-Z[a-zA-Z0-9_]* as a string
          DECIMAL --- a decimal constant [0-9]+ as a string                                                                                                                  
     *)
-    ostap (                                      
-      parse: empty {failwith "Not implemented"}
-    )
-    
+    ostap (
+      parse: 
+        !(Ostap.Util.expr
+          (fun v -> v)
+          [|
+            `Lefta, binarylist ["!!"];
+            `Lefta, binarylist ["&&"];
+            `Nona,  binarylist [">="; ">"; "<="; "<"; "=="; "!="];
+            `Lefta, binarylist ["+"; "-"];
+            `Lefta, binarylist ["*"; "/"; "%"]
+          |]
+          primary
+         );
+         primary: 
+        e:expr action:(
+        -"[" i:parse -"]" {`Elem i} 
+        | -"." %"length" {`Len}
+      ) * {List.fold_left (fun x -> function `Elem i -> Elem (x, i) | `Len -> Length x) e action};  
+      expr:
+        name : IDENT "(" args:!(Util.list0)[parse] ")" {Call (name, args)}
+        | variable: IDENT {Var (variable)}
+        | const: DECIMAL {Const (const)}
+        | str:STRING {String (String.sub str 1 (String.length str - 2))}
+        | ch:CHAR {Const (Char.code ch)}
+        | -"[" elements:!(Util.list0)[parse] -"]" {Array elements}
+        | -"(" parse -")"
+     ) 
   end
                     
 (* Simple statements: syntax and sematics *)
@@ -162,14 +236,14 @@ module Stmt =
     (* empty statement                  *) | Skip
     (* conditional                      *) | If     of Expr.t * t * t
     (* loop with a pre-condition        *) | While  of Expr.t * t
-    (* loop with a post-condition       *) | Repeat of t * Expr.t
+    (* loop with a post-condition       *) | Repeat of Expr.t * t
     (* return statement                 *) | Return of Expr.t option
     (* call a procedure                 *) | Call   of string * Expr.t list
                                                                     
     (* Statement evaluator
-
+    
          val eval : env -> config -> t -> config
-
+         
        Takes an environment, a configuration and a statement, and returns another configuration. The 
        environment is the same as for expressions
     *)
@@ -186,11 +260,69 @@ module Stmt =
       in
       State.update x (match is with [] -> v | _ -> update (State.eval st x) v is) st
           
-    let rec eval env ((st, i, o, r) as conf) k stmt = failwith "Not implemented"
+    let rec eval env sior k stmt =
+    	let sk stmt k =
+    		if k = Skip then stmt
+    		else Seq (stmt, k) in
+      match stmt, sior with
+    	| Assign (x, indexes, e), (statement, input, output, r) -> 
+    	let (statement', input', output', indx) = Expr.eval_list env sior indexes in
+    	let (statement', input', output', Some value) = Expr.eval env (statement', input', output', None) e in
+        eval env (update statement' x value indx, input', output', None) Skip k
+    	| Seq (a, b), sior ->
+        eval env sior (sk b k) a        
+    	| Skip, sior -> 
+    		if k = Skip then sior
+        else eval env sior Skip k       
+    	| If (cond, the, els), (statement, input, output, r) ->
+    		let (statement', input', output', Some value) as sior' = Expr.eval env sior cond in
+    		if Value.to_int value == 0 then eval env sior' k els  
+    		else eval env sior' k the      
+    	| While (cond, body), sior ->
+    	let (statement', input', output', Some res_cond) as sior' = Expr.eval env sior cond in
+        if Value.to_int res_cond == 0 then eval env sior' Skip k
+        else eval env sior' (sk stmt k) body      
+    	| Repeat (cond, body), sior ->
+        eval env sior (sk ( While(Expr.Binop("==", cond, Expr.Const 0), body)) k) body        
+    	| Call (func, args), sior ->
+        let sior' = Expr.eval env sior (Expr.Call (func, args)) in
+        eval env sior' Skip k   
+      | Return expr, (statement, input, output, r) -> 
+      (
+        match expr with
+        | None -> (statement, input, output, None)
+        | Some expr -> Expr.eval env sior expr
+      )
+
+    let rec parse_elif_acts elif_acts parsed_else_act = 
+      match elif_acts with
+      [] -> parsed_else_act
+      | (cond, act)::tail -> If (cond, act, parse_elif_acts tail parsed_else_act)
+
+    let parse_elif_else elif_acts else_act = 
+      let parsed_else_act = 
+        match else_act with
+        | None -> Skip
+        | Some act -> act
+      in parse_elif_acts elif_acts parsed_else_act
          
     (* Statement parser *)
     ostap (
-      parse: empty {failwith "Not implemented"}
+      parse: 
+        left_stmt:stmt -";" right_stmt:parse {Seq (left_stmt, right_stmt)} | stmt;
+      stmt: 
+        variable:IDENT indx:(-"[" !(Expr.parse) -"]") * -":=" expr:!(Expr.parse) {Assign (variable, indx, expr)}
+        | %"skip" {Skip}
+        | %"while" expr:!(Expr.parse) %"do" body:parse %"od" {While (expr, body)}
+        | %"repeat" body:parse %"until" expr:!(Expr.parse) {Repeat (expr, body)}
+        | %"for" init:parse -"," expr:!(Expr.parse) -"," loopexpr:parse %"do" body:parse %"od" {Seq (init, While (expr, Seq (body, loopexpr)))}
+        | %"if" expr:!(Expr.parse) %"then" at:parse aels:else_body %"fi" {If (expr, at, aels)}
+        | name : IDENT "(" args:!(Util.list0)[Expr.parse] ")" {Call (name, args)}
+        | %"return" expr:!(Expr.parse)? {Return (expr)}; 
+      else_body:
+        %"else" aels:parse {aels}
+        | %"elif" expr:!(Expr.parse) %"then" at:parse aels:else_body {If (expr, at, aels)}
+        | "" {Skip}
     )
       
   end
@@ -221,7 +353,7 @@ type t = Definition.t list * Stmt.t
 (* Top-level evaluator
 
      eval : t -> int list -> int list
-
+     
    Takes a program and its input stream, and returns the output stream
 *)
 let eval (defs, body) i =
