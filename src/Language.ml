@@ -35,7 +35,12 @@ module Value =
     | _ -> failwith "symbolic expression expected"
 
     let update_string s i x = String.init (String.length s) (fun j -> if j = i then x else s.[j])
-    let update_array  a i x = List.init   (List.length a)   (fun j -> if j = i then x else List.nth a j)
+    let listInit n f =
+        let rec init i n f =
+          if i >= n then []
+          else (f i) :: (init (i + 1) n f)
+        in init 0 n f
+    let update_array  a i x = listInit  (List.length a)   (fun j -> if j = i then x else List.nth a j)
 
   end
        
@@ -153,60 +158,110 @@ module Expr =
     type config = State.t * int list * int list * Value.t option
                                                             
     (* Expression evaluator
-
+    
           val eval : env -> config -> t -> int * config
-
-
+          
+          
        Takes an environment, a configuration and an expresion, and returns another configuration. The 
        environment supplies the following method
-
+       
            method definition : env -> string -> int list -> config -> config
-
+           
        which takes an environment (of the same type), a name of the function, a list of actual parameters and a configuration, 
        an returns a pair: the return value for the call and the resulting configuration
     *)                                                       
-    let to_func op =
-      let bti   = function true -> 1 | _ -> 0 in
-      let itb b = b <> 0 in
-      let (|>) f g   = fun x y -> f (g x y) in
-      match op with
-      | "+"  -> (+)
-      | "-"  -> (-)
-      | "*"  -> ( * )
-      | "/"  -> (/)
-      | "%"  -> (mod)
-      | "<"  -> bti |> (< )
-      | "<=" -> bti |> (<=)
-      | ">"  -> bti |> (> )
-      | ">=" -> bti |> (>=)
-      | "==" -> bti |> (= )
-      | "!=" -> bti |> (<>)
-      | "&&" -> fun x y -> bti (itb x && itb y)
-      | "!!" -> fun x y -> bti (itb x || itb y)
-      | _    -> failwith (Printf.sprintf "Unknown binary operator %s" op)    
+    let comp operators right left =
+    let numericbool numbers = if numbers != 0 then true else false in 
+    let boolnumeric numbers = if numbers then 1 else 0 in
+    match operators with
+    |"+" -> (right + left)
+    |"-" -> (right - left)
+    |"*" -> (right * left)
+    |"/" -> (right / left)
+    |"%" -> (right mod left)
+    |"<"  -> boolnumeric (right < left)
+    |"<=" -> boolnumeric (right <= left)
+    |">"  -> boolnumeric (right > left)
+    |">=" -> boolnumeric (right >= left)
+    |"==" -> boolnumeric (right == left)
+    |"!=" -> boolnumeric (right != left)
+    |"!!" -> boolnumeric (numericbool right || numericbool left)
+    |"&&" -> boolnumeric (numericbool right && numericbool left)
+    | _ -> failwith "Error"   
     
-    let rec eval env ((st, i, o, r) as conf) expr = failwith "Not implemented"
-    and eval_list env conf xs =
-      let vs, (st, i, o, _) =
-        List.fold_left
-          (fun (acc, conf) x ->
-            let (_, _, _, Some v) as conf = eval env conf x in
-            v::acc, conf
-          )
-          ([], conf)
-          xs
-      in
-      (st, i, o, List.rev vs)
+     let binarylist operatorslist = 
+      let listof operators = (ostap ($(operators)), 
+      fun expr1 expr2 -> Binop (operators, expr1, expr2)) in 
+      List.map listof operatorslist;;  
+    
+    let rec eval env ((statement, input, output, r) as sior) expr = 
+    match expr with
+    | Var v -> let result = State.eval statement v in	(statement, input, output, Some result)
+    | Const c -> (statement, input, output, Some (Value.of_int c))
+    | Array e -> let (statement, input, output, rt) = eval_list env sior e in env#definition env "$array" rt (statement, input, output, None)
+    | String s -> (statement, input, output, Some (Value.of_string s))
+    | Binop (operators, expr1, expr2) ->
+     let (_, _, _, Some l) as sior' = eval env sior expr1 in
+     let (statemen', input', output', Some r) = eval env sior' expr2 in
+     let numbers = (comp operators (Value.to_int l) (Value.to_int r)) in 
+     (statement, input, output, Some (Value.of_int numbers))
+    | Elem (a, indx) -> 
+        let (_, _, _, Some value_a) as sior = eval env sior a in 
+        let (_, _, _, Some value_indx) as sior = eval env sior indx in 
+        env#definition env "$elem" [value_a; value_indx] (statement, input, output, None)
+    | Length a -> 
+        let (statement, input, output, Some value_a) = eval env sior a in 
+        env#definition env "$length" [value_a] (statement, input, output, None)  
+    | Call (name, param) ->
+        let (sior', param') = List.fold_left 
+      	(fun (sior, cv) expr -> let (_, _, _, Some v) as sior' = eval env sior expr in (sior', cv @ [v])) (sior, [])
+     	param in
+      	env#definition env name param' sior'   
+      	
+      and eval_list env sior xs =
+       let vs, (statement, input, output, _) =
+         List.fold_left
+           (fun (cv, sior) x ->
+              let (_, _, _, Some v) as sior = eval env sior x in
+              v::cv, sior
+           )
+           ([], sior)
+           xs
+       in
+       (statement, input, output, List.rev vs)
          
     (* Expression parser. You can use the following terminals:
-
+    
          IDENT   --- a non-empty identifier a-zA-Z[a-zA-Z0-9_]* as a string
          DECIMAL --- a decimal constant [0-9]+ as a string                                                                                                                  
     *)
-    ostap (                                      
-      parse: empty {failwith "Not implemented"}
-    )
-    
+    ostap (
+      parse: 
+        !(Ostap.Util.expr
+          (fun v -> v)
+          [|
+            `Lefta, binarylist ["!!"];
+            `Lefta, binarylist ["&&"];
+            `Nona,  binarylist [">="; ">"; "<="; "<"; "=="; "!="];
+            `Lefta, binarylist ["+"; "-"];
+            `Lefta, binarylist ["*"; "/"; "%"]
+          |]
+          primary
+         );
+         primary: 
+        e:expr action:(
+        -"[" i:parse -"]" {`Elem i} 
+        | -"." %"length" {`Len}
+      ) * {List.fold_left (fun x -> function `Elem i -> Elem (x, i) | `Len -> Length x) e action};  
+      expr:
+        name : IDENT "(" args:!(Util.list0)[parse] ")" {Call (name, args)}
+        | variable: IDENT {Var (variable)}
+        | const: DECIMAL {Const (const)}
+        | str:STRING {String (String.sub str 1 (String.length str - 2))}
+        | ch:CHAR {Const (Char.code ch)}
+        | -"[" elements:!(Util.list0)[parse] -"]" {Array elements}
+        | -"(" parse -")"
+     ) 
   end
                     
 (* Simple statements: syntax and sematics *)
@@ -226,7 +281,10 @@ module Stmt =
 
         (* Pattern parser *)                                 
         ostap (
-          parse: empty {failwith "Not implemented"}
+           parse:
+            "`" x:IDENT body:(-"(" !(Util.list parse) -")")? { Sexp (x, match body with None -> [] | Some body -> body) }
+          | "_" {Wildcard}
+          | x:IDENT {Ident x}
         )
         
         let vars p =
@@ -241,16 +299,16 @@ module Stmt =
     (* empty statement                  *) | Skip
     (* conditional                      *) | If     of Expr.t * t * t
     (* loop with a pre-condition        *) | While  of Expr.t * t
-    (* loop with a post-condition       *) | Repeat of t * Expr.t
+    (* loop with a post-condition       *) | Repeat of Expr.t * t
     (* pattern-matching                 *) | Case   of Expr.t * (Pattern.t * t) list
     (* return statement                 *) | Return of Expr.t option
     (* call a procedure                 *) | Call   of string * Expr.t list 
     (* leave a scope                    *) | Leave  with show
                                                                                    
     (* Statement evaluator
-
+    
          val eval : env -> config -> t -> config
-
+         
        Takes an environment, a configuration and a statement, and returns another configuration. The 
        environment is the same as for expressions
     *)
@@ -266,13 +324,82 @@ module Stmt =
       in
       State.update x (match is with [] -> v | _ -> update (State.eval st x) v is) st
 
-    let rec eval env ((st, i, o, r) as conf) k stmt = failwith "Not implemented"
+      
+      let rec eval env ((st, i, o, r) as conf) k stmt =
+        match stmt with
+        | Assign (x, ind, e) -> 
+          let (st, i, o, ind) = Expr.eval_list env conf ind in
+          let (st, i, o, Some v) = Expr.eval env (st, i, o, None) e in
+          eval env (update st x v ind, i, o, None) Skip k
+        | Seq (left_st, right_st) -> eval env conf (
+          match k with
+          | Skip -> right_st
+          | _ -> Seq(right_st, k)
+        ) left_st
+        | Skip -> 
+          (match k with
+          | Skip -> conf
+          | _ -> eval env conf Skip k)
+        | If (e, s1, s2) -> 
+          let (st', i', o', Some v) = Expr.eval env conf e in
+          eval env conf k (if Value.to_int v <> 0 then s1 else s2)
+        | While (e, s) -> eval env conf k (If (e, Seq (s, While (e, s)), Skip))
+        | Repeat (e,s) -> eval env conf k (Seq (s, If (e, Skip, Repeat (e, s))))
+        | Call (f, e)  -> eval env (Expr.eval env conf (Expr.Call (f, e))) Skip k
+        | Case (e, bs) ->
+          let (_, _, _, Some v) as conf' = Expr.eval env conf e in 
+          let rec branch ((st, i, o, _) as conf) = function
+          | [] -> failwith("No branch selected")
+          | (patt, body)::tl -> 
+            let rec match_patt patt v st =
+              let update x v = function
+              | None -> None
+              | Some s -> Some (State.bind x v s)
+              in
+              match patt, v with
+              | Pattern.Ident x, v -> update x v st
+              | Pattern.Wildcard, _ -> st
+              | Pattern.Sexp (t, ps), Value.Sexp (t', vs) when t = t' -> match_list ps vs st
+              | _ -> None
+            and match_list ps vs s =
+              match ps, vs with
+              | [], [] -> s
+              | p::ps, v::vs -> match_list ps vs (match_patt p v s)
+              | _ -> None
+            in
+            match match_patt patt v (Some State.undefined) with
+            | None -> branch conf tl
+            | Some st' -> eval env (State.push st st' (Pattern.vars patt), i, o, None) k (Seq (body, Leave))
+          in
+          branch conf' bs
+        | Leave -> eval env (State.drop st, i, o, r) Skip k
+        | Return e ->
+          (match e with
+          | None -> conf
+          | Some e -> Expr.eval env conf e);;
                                                         
     (* Statement parser *)
     ostap (
-      parse: empty {failwith "Not implemented"}
-    )
-      
+      parse: 
+        left_stmt:stmt -";" right_stmt:parse {Seq (left_stmt, right_stmt)} | stmt;
+      stmt: 
+        variable:IDENT indx:(-"[" !(Expr.parse) -"]") * -":=" expr:!(Expr.parse) {Assign (variable, indx, expr)}
+        | %"skip" {Skip}
+        | %"while" expr:!(Expr.parse) %"do" body:parse %"od" {While (expr, body)}
+        | %"repeat" body:parse %"until" expr:!(Expr.parse) {Repeat (expr, body)}
+        | %"for" init:parse -"," expr:!(Expr.parse) -"," loopexpr:parse %"do" body:parse %"od" {Seq (init, While (expr, Seq (body, loopexpr)))}
+        | %"if" expr:!(Expr.parse) %"then" at:parse aels:else_body %"fi" {If (expr, at, aels)}
+        | name : IDENT "(" args:!(Util.list0)[Expr.parse] ")" {Call (name, args)}
+        | %"return" expr:!(Expr.parse)? {Return (expr)} 
+        | %"case" expr:!(Expr.parse) %"of" patterns:!(Ostap.Util.listBy)[ostap ("|")][pattern] %"esac" {Case (expr, patterns)};
+      pattern: 
+        p:!(Pattern.parse) "->" action:!(parse) {p, action};
+      else_body:
+        %"else" aels:parse {aels}
+        | %"elif" expr:!(Expr.parse) %"then" at:parse aels:else_body {If (expr, at, aels)}
+        | "" {Skip}
+
+     )
   end
 
 (* Function and procedure definitions *)
@@ -301,7 +428,7 @@ type t = Definition.t list * Stmt.t
 (* Top-level evaluator
 
      eval : t -> int list -> int list
-
+     
    Takes a program and its input stream, and returns the output stream
 *)
 let eval (defs, body) i =
